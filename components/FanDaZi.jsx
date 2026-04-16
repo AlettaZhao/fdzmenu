@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 
 /*
- *  饭搭子 FanDaZi — 点餐小助手 v6
+ *  饭搭子 FanDaZi — 点餐小助手 v6.1
  *  Warm & refined · Chinese food culture inspired
  *
  *  v5 changes:
@@ -137,11 +137,19 @@ const Celebration = ({ show }) => {
   const items = ["🎉","🍜","🥂","🍕","🎊","🥟","🍣","🥘","🍻","✨","🍔","🥗"];
   return (
     <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 999 }}>
-      {items.map((e, i) => (
-        <div key={i} style={{ position: "absolute", top: -40, left: `${6 + (i * 8) % 88}%`, fontSize: `${18 + (i % 4) * 5}px`, animation: `confettiFall ${2 + (i % 3) * 0.7}s ease-in ${i * 0.12}s forwards` }}>{e}</div>
-      ))}
-      <div style={{ position: "absolute", top: "36%", left: "50%", animation: "bannerIn 4s ease-in-out forwards", background: "rgba(255,255,255,0.97)", borderRadius: "20px", padding: "28px 40px", boxShadow: "0 12px 48px rgba(0,0,0,0.15)", textAlign: "center" }}>
-        <div style={{ fontSize: "40px", marginBottom: "8px" }}>🎉🍽🎉</div>
+      {/* Confetti layer — sits behind the banner so falling emoji never overlap the card */}
+      <div style={{ position: "absolute", inset: 0, zIndex: 1, overflow: "hidden" }}>
+        {items.map((e, i) => (
+          <div key={i} style={{ position: "absolute", top: -40, left: `${6 + (i * 8) % 88}%`, fontSize: `${18 + (i % 4) * 5}px`, animation: `confettiFall ${2 + (i % 3) * 0.7}s ease-in ${i * 0.12}s forwards` }}>{e}</div>
+        ))}
+      </div>
+      {/* Banner — opaque background + higher z-index, so confetti can never bleed through */}
+      <div style={{ position: "absolute", top: "36%", left: "50%", zIndex: 2, animation: "bannerIn 4s ease-in-out forwards", background: "#fff", borderRadius: "20px", padding: "28px 40px", boxShadow: "0 12px 48px rgba(0,0,0,0.15)", textAlign: "center", minWidth: "240px" }}>
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "14px", fontSize: "40px", lineHeight: 1, marginBottom: "12px" }}>
+          <span>🎉</span>
+          <span>🍽️</span>
+          <span>🎉</span>
+        </div>
         <p style={{ fontSize: "22px", fontWeight: 700, color: C.accent, fontFamily: fontSerif, margin: "0 0 4px" }}>点餐完成！</p>
         <p style={{ fontSize: "14px", color: C.sub }}>祝你用餐愉快，好好享受吧～</p>
       </div>
@@ -271,8 +279,11 @@ export default function FanDaZi() {
   const allPriced = selected.length > 0 && selected.every(i => parsePrice(recs[i]?.price) !== null);
 
   // ── Image compress ──
-  const compress = (file, maxW = 1200, q = 0.6) => new Promise((resolve) => {
+  // Creates a blob URL, waits for the image to decode, draws onto a canvas, and
+  // revokes the blob URL before resolving — so we don't leak one URL per upload.
+  const compress = (file, maxW = 1200, q = 0.6) => new Promise((resolve, reject) => {
     const img = new Image();
+    const url = URL.createObjectURL(file);
     img.onload = () => {
       const canvas = document.createElement('canvas');
       let w = img.width, h = img.height;
@@ -280,34 +291,52 @@ export default function FanDaZi() {
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(img, 0, 0, w, h);
       const dataUrl = canvas.toDataURL('image/jpeg', q);
+      URL.revokeObjectURL(url);
       resolve({ dataUrl, base64: dataUrl.split(',')[1], mediaType: 'image/jpeg' });
     };
-    img.src = URL.createObjectURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('图片加载失败'));
+    };
+    img.src = url;
   });
 
   // ── Multi-file upload ──
   const handleUpload = async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
-    const compressed = await Promise.all(files.map(f => compress(f)));
-    setImages(prev => [...prev, ...compressed]);
-    e.target.value = "";
+    try {
+      const compressed = await Promise.all(files.map(f => compress(f)));
+      setImages(prev => [...prev, ...compressed]);
+    } catch (err) {
+      setError(err.message || "图片处理失败，请换一张试试");
+    } finally {
+      e.target.value = "";
+    }
   };
 
   // ── AI request (backend proxy auto-selects Kimi model) ──
-  const ask = async (msgs, retries = 1) => {
+  // signal: optional AbortSignal — used by the Step 3 background prefetch so we can
+  // cancel in-flight requests when the user changes their selection.
+  const ask = async (msgs, retries = 1, signal) => {
     for (let i = 0; i <= retries; i++) {
       try {
         const r = await fetch("/api/chat", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ max_tokens: 4096, messages: msgs }),
+          signal,
         });
         if (!r.ok) throw new Error(`请求失败 (${r.status})`);
         const d = await r.json();
         const t = (d.content || []).map(c => c.text || "").join("");
         if (!t) throw new Error("返回为空，请再试一次");
         return t;
-      } catch (err) { if (i === retries) throw err; await new Promise(r => setTimeout(r, 1500)); }
+      } catch (err) {
+        // Don't retry on user-triggered abort — propagate immediately
+        if (err.name === 'AbortError') throw err;
+        if (i === retries) throw err;
+        await new Promise(r => setTimeout(r, 1500));
+      }
     }
   };
 
@@ -360,12 +389,19 @@ Start with [ end with ]. No markdown.` }
       setMenuItems(allItems);
       setFavorites([]);
       setActiveCat("全部");
+      setMenuTags({ ingredients: [], flavors: [] }); // fallback defaults; may be overwritten by background task
 
-      // ── Extract dynamic tags ──
-      setLoadText("正在整理菜品信息...");
-      try {
-        const itemList = allItems.map(m => `${m.name}${m.zhDesc ? "（" + m.zhDesc + "）" : ""}`).join("\n");
-        const tagRaw = await ask([{ role: "user", content: `Based on this restaurant menu, identify what's available.
+      // ── Navigate immediately; extract dynamic tags in the background ──
+      // This removes a blocking round-trip from the Step 0 → Step 1 transition.
+      // The user browses the menu on Step 1 while tags are being computed; tags only
+      // matter on Step 2 (偏好设置), by which time they have usually already arrived.
+      setStep(1);
+      setLoading(false);
+
+      (async () => {
+        try {
+          const itemList = allItems.map(m => `${m.name}${m.zhDesc ? "(" + m.zhDesc + ")" : ""}`).join("\n");
+          const tagRaw = await ask([{ role: "user", content: `Based on this restaurant menu, identify what's available.
 
 MENU:
 ${itemList}
@@ -376,16 +412,18 @@ Return ONLY JSON:
   "flavors": ["only flavor profiles available on this menu, in Chinese — choose from: 辣, 酸, 甜, 咸鲜, 烧烤/煎烤, 奶油/浓郁, 清淡, 烟熏, 香草"]
 }
 Be precise — only include what genuinely appears. Start with { end with }.` }]);
-        const tags = safeParse(tagRaw);
-        if (tags.ingredients && tags.flavors) {
-          setMenuTags({ ingredients: tags.ingredients, flavors: tags.flavors });
+          const tags = safeParse(tagRaw);
+          if (tags && Array.isArray(tags.ingredients) && Array.isArray(tags.flavors)) {
+            setMenuTags({ ingredients: tags.ingredients, flavors: tags.flavors });
+          }
+        } catch {
+          // silent — default tags are already in place
         }
-      } catch {
-        setMenuTags({ ingredients: [], flavors: [] });
-      }
-
-      setStep(1);
-    } catch (e) { setError(e.message); } finally { setLoading(false); }
+      })();
+    } catch (e) {
+      setError(e.message);
+      setLoading(false);
+    }
   };
 
   // ── Step 2→3: Recommend ──
@@ -422,23 +460,9 @@ score 1-5. Start with [ end with ].` }]);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   };
 
-  // ── Step 3→4: Generate order ──
-  const doOrder = async (langOverride) => {
-    if (!selected.length) return;
-    const lang = LANGS.find(l => l.key === (langOverride || orderLang)) || LANGS[0];
-    setOrderLang(lang.key); // keep state in sync whether cache hit or API call
-
-    // Cache hit: switch language instantly without hitting the API
-    if (orderCache[lang.key]) {
-      setOrder(orderCache[lang.key]);
-      if (step !== 4) setStep(4);
-      return;
-    }
-
-    setLoading(true); setLoadText(`正在生成${lang.short}话术...`); setError(null);
-    try {
-      const dishes = selected.map(i => recs[i]);
-      const raw = await ask([{ role: "user", content: `Help Chinese tourists order at a restaurant. Write ${lang.prompt}.
+  // Prompt used by both the user-initiated Step 3→4 transition AND the background
+  // prefetch. Keep the two paths in a single helper so they can never drift.
+  const buildOrderPrompt = (lang, dishes) => `Help Chinese tourists order at a restaurant. Write ${lang.prompt}.
 
 Sound completely natural — like a local regular politely ordering. Colloquial but polite.
 
@@ -453,14 +477,89 @@ Return ONLY JSON:
   "chinese": "逐句中文对照翻译",
   "tips": "1-2条实用点餐小贴士（中文）"
 }
-Start { end }. Nothing else.` }]);
+Start { end }. Nothing else.`;
+
+  // ── Step 3→4: Generate order ──
+  const doOrder = async (langOverride) => {
+    if (!selected.length) return;
+    const lang = LANGS.find(l => l.key === (langOverride || orderLang)) || LANGS[0];
+    setOrderLang(lang.key); // keep state in sync whether cache hit or API call
+    const isFirstTransition = step !== 4; // only celebrate on the initial step-3→step-4 jump
+
+    // Cache hit: switch language instantly without hitting the API.
+    // On Step 3, the background prefetch may have already populated this for the
+    // current orderLang — in which case this branch makes the transition feel instant.
+    if (orderCache[lang.key]) {
+      setOrder(orderCache[lang.key]);
+      if (isFirstTransition) { setStep(4); setCelebrate(true); }
+      return;
+    }
+
+    setCelebrate(false); // reset first so the animation can re-fire on a later re-generate
+    setLoading(true); setLoadText(`正在生成${lang.short}话术...`); setError(null);
+    try {
+      const dishes = selected.map(i => recs[i]);
+      const raw = await ask([{ role: "user", content: buildOrderPrompt(lang, dishes) }]);
       const res = safeParse(raw);
       if (!res.order) throw new Error("生成不完整，请重试");
       setOrder(res);
       setOrderCache(prev => ({ ...prev, [lang.key]: res }));
-      setStep(4); setCelebrate(false);
+      setStep(4);
+      if (isFirstTransition) setCelebrate(true); // only after a successful first generation
     } catch (e) { console.error("Order error:", e); setError(e.message); } finally { setLoading(false); }
   };
+
+  // ── P2: Prefetch Step 4 order translation while the user is still in Step 3 ──
+  // After 800ms of idle time on a non-empty selection, quietly generate the order
+  // for the current orderLang and drop it into orderCache. When the user clicks
+  // "生成点单口语", doOrder hits the cache branch above and transitions instantly.
+  //
+  // Invariants:
+  // - Any change to selection / preferences wipes orderCache first, so doOrder
+  //   never serves a stale translation that belongs to a previous selection.
+  // - Every scheduled prefetch owns an AbortController; the effect cleanup cancels
+  //   both the pending timer and any in-flight fetch, so rapid picking never
+  //   stacks concurrent requests.
+  // - retries=0 for prefetch: we don't want to burn tokens on transient failures;
+  //   if the user actually clicks, doOrder runs with normal retry behavior.
+  useEffect(() => {
+    if (step !== 3) return;
+
+    // Selection or preferences changed → any prior cached order is stale
+    setOrderCache({});
+
+    if (selected.length === 0) return;
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      const lang = LANGS.find(l => l.key === orderLang) || LANGS[0];
+      try {
+        const dishes = selected.map(i => recs[i]).filter(Boolean);
+        if (dishes.length === 0) return;
+        const raw = await ask(
+          [{ role: "user", content: buildOrderPrompt(lang, dishes) }],
+          0,
+          ctrl.signal,
+        );
+        if (ctrl.signal.aborted) return;
+        const res = safeParse(raw);
+        if (res && res.order) {
+          // Guard against overwriting a value doOrder may have just written
+          setOrderCache(prev => prev[lang.key] ? prev : { ...prev, [lang.key]: res });
+        }
+      } catch {
+        // silent — prefetch is best-effort; doOrder handles real errors on click
+      }
+    }, 800);
+
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+    // buildOrderPrompt/ask are stable closures over the listed deps; excluding them
+    // avoids re-firing the effect every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, selected, orderLang, recs, party, avoids, notes]);
 
   const doCopy = (t) => { navigator.clipboard?.writeText(t); setCopied(true); setTimeout(() => setCopied(false), 2000); };
   const reset = () => {
@@ -553,9 +652,9 @@ Start { end }. Nothing else.` }]);
         <StepBar current={step} />
 
         {error && (
-          <div style={{ background: C.redBg, border: "1px solid #FCA5A5", borderRadius: C.rs, padding: "12px 16px", marginBottom: "14px", color: C.red, fontSize: "13px", lineHeight: 1.5, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <span>⚠️ {error}</span>
-            <span onClick={() => setError(null)} style={{ cursor: "pointer", fontWeight: 700, fontSize: "16px", lineHeight: 1, marginLeft: 8, flexShrink: 0 }}>×</span>
+          <div style={{ background: C.redBg, border: "1px solid #FCA5A5", borderRadius: C.rs, padding: "12px 16px", marginBottom: "14px", color: C.red, fontSize: "13px", lineHeight: 1.5, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "8px" }}>
+            <span style={{ flex: 1, minWidth: 0, wordBreak: "break-word" }}>⚠️ {error}</span>
+            <span onClick={() => setError(null)} style={{ cursor: "pointer", fontWeight: 700, fontSize: "16px", lineHeight: 1, flexShrink: 0 }}>×</span>
           </div>
         )}
 
@@ -806,7 +905,7 @@ Start { end }. Nothing else.` }]);
 
                 <div style={{ display: "flex", gap: "10px" }}>
                   <Button variant="outline" onClick={() => setStep(2)} style={{ flex: 1 }}>← 调整偏好</Button>
-                  <Button variant="green" onClick={() => { setOrderCache({}); setCelebrate(true); doOrder(); }} disabled={!selected.length} style={{ flex: 2 }}>
+                  <Button variant="green" onClick={() => { setOrderCache({}); doOrder(); }} disabled={!selected.length} style={{ flex: 2 }}>
                     📋 生成话术 ({selected.length}道)
                   </Button>
                 </div>
@@ -834,7 +933,7 @@ Start { end }. Nothing else.` }]);
 
                   <div style={{
                     background: C.bg, borderRadius: C.rs, padding: "14px",
-                    fontSize: "15px", lineHeight: 1.9, fontFamily: "Georgia, 'Times New Roman', serif",
+                    fontSize: "15px", lineHeight: 1.9, fontFamily: fontSerif,
                     color: C.ink, whiteSpace: "pre-wrap",
                   }}>
                     {order.order}
@@ -882,7 +981,7 @@ Start { end }. Nothing else.` }]);
 
                 <div style={{ display: "flex", gap: "10px" }}>
                   <Button variant="outline" onClick={() => setStep(3)} style={{ flex: 1 }}>← 改选菜品</Button>
-                  <Button variant="secondary" onClick={reset} style={{ flex: 1 }}>🔄 换家新菜单</Button>
+                  <Button variant="secondary" onClick={reset} style={{ flex: 1 }}>🔄 换一家</Button>
                 </div>
               </div>
             )}

@@ -1,23 +1,5 @@
 import { useState, useRef, useEffect } from "react";
 
-/*
- *  饭搭子 FanDaZi — 点餐小助手 v6.1
- *  Warm & refined · Chinese food culture inspired
- *
- *  v5 changes:
- *  - Backend migrated from Claude to Kimi (vision model auto-selected for images)
- *  - Extract DEFAULT_AVOIDS / DEFAULT_FLAVORS constants (less repetition)
- *  - Unified button copy and tip wording across steps
- *  - Clearer labels: "过敏 / 忌口", loading text, icons
- *  - Removed 'AI / 智能 / 海外' references from user-visible surface
- *  - Cache generated orders per language (saves API calls on Step 4 switch)
- *  - Confirm before re-recommending if user already picked dishes
- *
- *  v6 changes (code cleanup only — no user-visible behavior change):
- *  - Rename tog → toggle, addC → addCustom
- *  - Extract <PreferenceSection> component (dedupes 忌口 and 口味 cards)
- */
-
 const C = {
   bg: "#FFFBF5", card: "#FFFFFF", accent: "#C43E1C", accentSoft: "#FFF1EC",
   accentDark: "#9A2E12", ink: "#1C1917", sub: "#78716C", muted: "#A8A29E",
@@ -29,23 +11,6 @@ const C = {
 const font = `'Noto Sans SC','PingFang SC','Helvetica Neue',sans-serif`;
 const fontSerif = `'Noto Serif SC','Songti SC',Georgia,serif`;
 
-const GlobalCSS = () => (
-  <style>{`
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@600;700&display=swap');
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: ${C.bg}; }
-    @keyframes fadeUp { from { opacity:0; transform:translateY(14px) } to { opacity:1; transform:translateY(0) } }
-    @keyframes spin { to { transform: rotate(360deg) } }
-    @keyframes popIn { 0% { transform: scale(0.85); opacity:0 } 60% { transform: scale(1.04) } 100% { transform: scale(1); opacity:1 } }
-    @keyframes confettiFall { 0% { transform: translateY(-50px) rotate(0deg); opacity:1 } 80% { opacity:1 } 100% { transform: translateY(100vh) rotate(540deg); opacity:0 } }
-    @keyframes bannerIn { 0%,100% { transform: translate(-50%,-50%) scale(0); opacity:0 } 12% { transform: translate(-50%,-50%) scale(1.08); opacity:1 } 75% { transform: translate(-50%,-50%) scale(1); opacity:1 } 100% { transform: translate(-50%,-50%) scale(0.9); opacity:0 } }
-    @keyframes heartBeat { 0% { transform: scale(1) } 25% { transform: scale(1.3) } 50% { transform: scale(0.95) } 100% { transform: scale(1) } }
-    .fav-btn:active { animation: heartBeat 0.3s ease; }
-    .cat-scroll::-webkit-scrollbar { display: none; }
-  `}</style>
-);
-
-// ── Primitives ──
 const Pill = ({ children, active, onClick, style = {} }) => (
   <span onClick={onClick} style={{
     display: "inline-flex", alignItems: "center", gap: "5px",
@@ -137,13 +102,11 @@ const Celebration = ({ show }) => {
   const items = ["🎉","🍜","🥂","🍕","🎊","🥟","🍣","🥘","🍻","✨","🍔","🥗"];
   return (
     <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 999 }}>
-      {/* Confetti layer — sits behind the banner so falling emoji never overlap the card */}
       <div style={{ position: "absolute", inset: 0, zIndex: 1, overflow: "hidden" }}>
         {items.map((e, i) => (
           <div key={i} style={{ position: "absolute", top: -40, left: `${6 + (i * 8) % 88}%`, fontSize: `${18 + (i % 4) * 5}px`, animation: `confettiFall ${2 + (i % 3) * 0.7}s ease-in ${i * 0.12}s forwards` }}>{e}</div>
         ))}
       </div>
-      {/* Banner — opaque background + higher z-index, so confetti can never bleed through */}
       <div style={{ position: "absolute", top: "36%", left: "50%", zIndex: 2, animation: "bannerIn 4s ease-in-out forwards", background: "#fff", borderRadius: "20px", padding: "28px 40px", boxShadow: "0 12px 48px rgba(0,0,0,0.15)", textAlign: "center", minWidth: "240px" }}>
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "14px", fontSize: "40px", lineHeight: 1, marginBottom: "12px" }}>
           <span>🎉</span>
@@ -174,11 +137,25 @@ function safeParse(raw) {
   throw new Error("解析失败，请再试一次");
 }
 
-// ── Preference defaults (used when menu-specific tags can't be extracted) ──
+const IMAGE_MAX_WIDTH = 1600;
+const IMAGE_JPEG_QUALITY = 0.72;
+const REQUEST_TIMEOUTS = {
+  recognize: 75000,
+  tags: 20000,
+  recommend: 35000,
+  order: 30000,
+};
+
+const cleanRecommendationCopy = (text = "") =>
+  String(text)
+    .replace(/您的用户特别感兴趣/g, "您感兴趣")
+    .replace(/用户特别感兴趣/g, "您感兴趣")
+    .replace(/您的用户/g, "您")
+    .replace(/用户/g, "您");
+
 const DEFAULT_AVOIDS = ["海鲜", "猪肉", "牛肉", "鸡肉", "羊肉", "乳制品", "坚果", "麸质", "蛋类", "香菜", "洋葱", "蘑菇"];
 const DEFAULT_FLAVORS = ["辣", "酸", "甜", "咸鲜", "烧烤/煎烤", "汤类", "面食", "米饭", "蔬菜", "土豆", "芝士", "肉食"];
 
-// ── Language config ──
 const LANGS = [
   { key: "en", label: "English", flag: "🇬🇧", short: "英语", prompt: "in English, as a native English speaker would naturally say" },
   { key: "ja", label: "日本語", flag: "🇯🇵", short: "日语", prompt: "in Japanese (日本語), using polite keigo (丁寧語/です・ます). Write like a native Japanese speaker ordering at a restaurant" },
@@ -189,7 +166,6 @@ const LANGS = [
   { key: "ko", label: "한국어", flag: "🇰🇷", short: "韩语", prompt: "in Korean (한국어), using polite 존댓말 (jondaenmal). Write like a native Korean speaker ordering at a restaurant" },
 ];
 
-// ── Category display ──
 const CAT_ICONS = {
   "前菜": "🥗", "开胃菜": "🥗", "沙拉": "🥗", "appetizer": "🥗", "starter": "🥗", "salad": "🥗", "antipasti": "🥗", "entrée": "🥗", "hors": "🥗",
   "主食": "🍝", "主菜": "🍝", "pasta": "🍝", "main": "🍝", "piatti": "🍝", "plat": "🍝", "secondi": "🍝", "primi": "🍝",
@@ -213,7 +189,6 @@ function getCatIcon(cat) {
   return "🍽";
 }
 
-// ══════════════════ APP ══════════════════
 export default function FanDaZi() {
   const [step, setStep] = useState(0);
   const [images, setImages] = useState([]);
@@ -240,7 +215,7 @@ export default function FanDaZi() {
   const [selected, setSelected] = useState([]);
   const [orderLang, setOrderLang] = useState("en");
   const [order, setOrder] = useState(null);
-  const [orderCache, setOrderCache] = useState({}); // { [langKey]: orderObject } — cached per completed Step 4 session
+  const [orderCache, setOrderCache] = useState({});
   const [copied, setCopied] = useState(false);
 
   const fileRef = useRef();
@@ -252,7 +227,6 @@ export default function FanDaZi() {
   const toggle = (list, set, v) => set(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
   const addCustom = (val, list, set, clear) => { const v = val.trim(); if (v && !list.includes(v)) { set(p => [...p, v]); clear(""); } };
 
-  // ── Derived: categories ──
   const categories = (() => {
     const cats = {};
     menuItems.forEach((item, idx) => {
@@ -264,24 +238,24 @@ export default function FanDaZi() {
   })();
   const categoryNames = Object.keys(categories);
 
-  // ── Filtered items for overview ──
   const filteredIndices = activeCat === "❤️ 已收藏"
     ? favorites
     : activeCat === "全部"
       ? menuItems.map((_, i) => i)
       : (categories[activeCat] || []);
 
-  // ── Price helpers ──
   const parsePrice = (s) => { if (!s) return null; const m = s.replace(/,/g, '.').match(/[\d.]+/); return m ? parseFloat(m[0]) : null; };
   const getCurrency = (s) => { if (!s) return ""; return s.replace(/[\d.,\s]/g, "").trim(); };
+  const getRecommendRange = () => {
+    const max = Math.max(1, Math.min(Math.max(5, party * 2), menuItems.length, 10));
+    const min = Math.min(Math.max(3, party + 1), max);
+    return { min, max };
+  };
   const selTotal = selected.reduce((sum, i) => { const p = parsePrice(recs[i]?.price); return p !== null ? sum + p : sum; }, 0);
   const selCurr = selected.length > 0 ? getCurrency(recs[selected[0]]?.price) : "";
   const allPriced = selected.length > 0 && selected.every(i => parsePrice(recs[i]?.price) !== null);
 
-  // ── Image compress ──
-  // Creates a blob URL, waits for the image to decode, draws onto a canvas, and
-  // revokes the blob URL before resolving — so we don't leak one URL per upload.
-  const compress = (file, maxW = 1200, q = 0.6) => new Promise((resolve, reject) => {
+  const compress = (file, maxW = IMAGE_MAX_WIDTH, q = IMAGE_JPEG_QUALITY) => new Promise((resolve, reject) => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
@@ -301,7 +275,6 @@ export default function FanDaZi() {
     img.src = url;
   });
 
-  // ── Multi-file upload ──
   const handleUpload = async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
@@ -315,32 +288,46 @@ export default function FanDaZi() {
     }
   };
 
-  // ── AI request (backend proxy auto-selects Kimi model) ──
-  // signal: optional AbortSignal — used by the Step 3 background prefetch so we can
-  // cancel in-flight requests when the user changes their selection.
-  const ask = async (msgs, retries = 1, signal) => {
+  const ask = async (msgs, { retries = 1, signal, maxTokens = 2048, timeoutMs = 45000 } = {}) => {
     for (let i = 0; i <= retries; i++) {
+      const ctrl = new AbortController();
+      let timedOut = false;
+      const onAbort = () => ctrl.abort();
+      const timer = setTimeout(() => {
+        timedOut = true;
+        ctrl.abort();
+      }, timeoutMs);
+
+      if (signal) {
+        if (signal.aborted) ctrl.abort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+
       try {
         const r = await fetch("/api/chat", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ max_tokens: 4096, messages: msgs }),
-          signal,
+          body: JSON.stringify({ max_tokens: maxTokens, messages: msgs }),
+          signal: ctrl.signal,
         });
-        if (!r.ok) throw new Error(`请求失败 (${r.status})`);
         const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `请求失败 (${r.status})`);
         const t = (d.content || []).map(c => c.text || "").join("");
         if (!t) throw new Error("返回为空，请再试一次");
         return t;
       } catch (err) {
-        // Don't retry on user-triggered abort — propagate immediately
+        if (err.name === 'AbortError' && timedOut) {
+          throw new Error("这一步响应超时了，请稍后重试，或先少选几页菜单");
+        }
         if (err.name === 'AbortError') throw err;
         if (i === retries) throw err;
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(r => setTimeout(r, 800));
+      } finally {
+        clearTimeout(timer);
+        if (signal) signal.removeEventListener("abort", onAbort);
       }
     }
   };
 
-  // ── Detect menu language ──
   const detectLang = (items) => {
     const sample = items.slice(0, 10).map(i => i.name).join(" ");
     if (/[äöüß]/i.test(sample)) return "de";
@@ -352,7 +339,6 @@ export default function FanDaZi() {
     return "en";
   };
 
-  // ── Step 0→1: Recognize + translate descriptions + extract tags ──
   const doRecognize = async () => {
     setLoading(true); setError(null);
     setLoadText(images.length > 1 ? `正在识别 ${images.length} 页菜单...` : "正在识别菜单...");
@@ -364,7 +350,7 @@ export default function FanDaZi() {
 Return ONLY a JSON array. Each element:
 {"name":"dish name exactly as written on menu","price":"price with currency or null","category":"menu section as written (e.g. Antipasti, Primi, Desserts)","description":"original description or null","zhDesc":"用简短中文描述这道菜（食材和做法，10字以内）"}
 Start with [ end with ]. No markdown.` }
-        ]}]);
+        ]}], { maxTokens: 4096, timeoutMs: REQUEST_TIMEOUTS.recognize });
         return safeParse(raw);
       };
 
@@ -389,12 +375,8 @@ Start with [ end with ]. No markdown.` }
       setMenuItems(allItems);
       setFavorites([]);
       setActiveCat("全部");
-      setMenuTags({ ingredients: [], flavors: [] }); // fallback defaults; may be overwritten by background task
+      setMenuTags({ ingredients: [], flavors: [] });
 
-      // ── Navigate immediately; extract dynamic tags in the background ──
-      // This removes a blocking round-trip from the Step 0 → Step 1 transition.
-      // The user browses the menu on Step 1 while tags are being computed; tags only
-      // matter on Step 2 (偏好设置), by which time they have usually already arrived.
       setStep(1);
       setLoading(false);
 
@@ -411,13 +393,12 @@ Return ONLY JSON:
   "ingredients": ["only ingredient categories actually on this menu, in Chinese — choose from: 海鲜, 猪肉, 牛肉, 鸡肉, 羊肉, 乳制品, 坚果, 蛋类, 蘑菇, 甲壳类, 豆类, 麸质"],
   "flavors": ["only flavor profiles available on this menu, in Chinese — choose from: 辣, 酸, 甜, 咸鲜, 烧烤/煎烤, 奶油/浓郁, 清淡, 烟熏, 香草"]
 }
-Be precise — only include what genuinely appears. Start with { end with }.` }]);
+Be precise — only include what genuinely appears. Start with { end with }.` }], { retries: 0, maxTokens: 700, timeoutMs: REQUEST_TIMEOUTS.tags });
           const tags = safeParse(tagRaw);
           if (tags && Array.isArray(tags.ingredients) && Array.isArray(tags.flavors)) {
             setMenuTags({ ingredients: tags.ingredients, flavors: tags.flavors });
           }
         } catch {
-          // silent — default tags are already in place
         }
       })();
     } catch (e) {
@@ -426,19 +407,16 @@ Be precise — only include what genuinely appears. Start with { end with }.` }]
     }
   };
 
-  // ── Step 2→3: Recommend ──
   const doRecommend = async () => {
-    // If the user already picked dishes from a previous recommendation,
-    // warn them that re-recommending will clear those picks.
     if (selected.length > 0) {
       const ok = window.confirm(`重新推荐会清空之前已选的 ${selected.length} 道菜，继续吗？`);
       if (!ok) return;
     }
     setLoading(true); setLoadText("饭搭子正在搭配中..."); setError(null);
     try {
-      const min = Math.max(3, party + 1), max = Math.min(Math.max(5, party * 2), menuItems.length, 10);
+      const { min, max } = getRecommendRange();
       const favInfo = favorites.length > 0
-        ? `\n\nUSER FAVORITES (user is interested in these — prioritize but ensure variety):\n${favorites.map(i => menuItems[i].name).join(", ")}`
+        ? `\n\nHEARTED DISHES (the diner is interested in these — prioritize but keep variety):\n${favorites.map(i => menuItems[i].name).join(", ")}`
         : "";
       const raw = await ask([{ role: "user", content: `You're a food expert helping ${party} Chinese travelers order abroad.
 
@@ -451,17 +429,22 @@ SPICE: ${spiceLabels[spice]}
 NOTES: ${notes || "无"}${favInfo}
 
 Pick ${min}-${max} dishes for ${party} people. Good variety (appetizer + main + maybe dessert). STRICTLY exclude avoided ingredients.
+When explaining a hearted dish, say "这是您感兴趣的..." or a similarly natural phrase. Never say "用户" in user-facing Chinese copy.
 Return ONLY JSON array: [{"name":"exact menu name","price":"or null","zhName":"中文名","reason":"一句话推荐理由（中文）","taste":"口感描述，用中国人熟悉的比喻（中文）","ingredients":"主要食材（中文）","score":4,"warning":"忌口提醒或null"}]
-score 1-5. Start with [ end with ].` }]);
+score 1-5. Start with [ end with ].` }], { retries: 0, maxTokens: 1800, timeoutMs: REQUEST_TIMEOUTS.recommend });
       const r = safeParse(raw);
       if (!Array.isArray(r) || !r.length) throw new Error("推荐失败，请重试");
-      r.forEach(x => x.score = parseInt(x.score) || 3);
+      r.forEach((x) => {
+        x.score = parseInt(x.score) || 3;
+        x.reason = cleanRecommendationCopy(x.reason);
+        x.taste = cleanRecommendationCopy(x.taste);
+        x.ingredients = cleanRecommendationCopy(x.ingredients);
+        x.warning = x.warning ? cleanRecommendationCopy(x.warning) : null;
+      });
       setRecs(r); setSelected([]); setStep(3);
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   };
 
-  // Prompt used by both the user-initiated Step 3→4 transition AND the background
-  // prefetch. Keep the two paths in a single helper so they can never drift.
   const buildOrderPrompt = (lang, dishes) => `Help Chinese tourists order at a restaurant. Write ${lang.prompt}.
 
 Sound completely natural — like a local regular politely ordering. Colloquial but polite.
@@ -479,53 +462,35 @@ Return ONLY JSON:
 }
 Start { end }. Nothing else.`;
 
-  // ── Step 3→4: Generate order ──
   const doOrder = async (langOverride) => {
     if (!selected.length) return;
     const lang = LANGS.find(l => l.key === (langOverride || orderLang)) || LANGS[0];
-    setOrderLang(lang.key); // keep state in sync whether cache hit or API call
-    const isFirstTransition = step !== 4; // only celebrate on the initial step-3→step-4 jump
+    setOrderLang(lang.key);
+    const isFirstTransition = step !== 4;
 
-    // Cache hit: switch language instantly without hitting the API.
-    // On Step 3, the background prefetch may have already populated this for the
-    // current orderLang — in which case this branch makes the transition feel instant.
     if (orderCache[lang.key]) {
       setOrder(orderCache[lang.key]);
       if (isFirstTransition) { setStep(4); setCelebrate(true); }
       return;
     }
 
-    setCelebrate(false); // reset first so the animation can re-fire on a later re-generate
+    setCelebrate(false);
     setLoading(true); setLoadText(`正在生成${lang.short}话术...`); setError(null);
     try {
       const dishes = selected.map(i => recs[i]);
-      const raw = await ask([{ role: "user", content: buildOrderPrompt(lang, dishes) }]);
+      const raw = await ask([{ role: "user", content: buildOrderPrompt(lang, dishes) }], { maxTokens: 1000, timeoutMs: REQUEST_TIMEOUTS.order });
       const res = safeParse(raw);
       if (!res.order) throw new Error("生成不完整，请重试");
       setOrder(res);
       setOrderCache(prev => ({ ...prev, [lang.key]: res }));
       setStep(4);
-      if (isFirstTransition) setCelebrate(true); // only after a successful first generation
-    } catch (e) { console.error("Order error:", e); setError(e.message); } finally { setLoading(false); }
+      if (isFirstTransition) setCelebrate(true);
+    } catch (e) { setError(e.message); } finally { setLoading(false); }
   };
 
-  // ── P2: Prefetch Step 4 order translation while the user is still in Step 3 ──
-  // After 800ms of idle time on a non-empty selection, quietly generate the order
-  // for the current orderLang and drop it into orderCache. When the user clicks
-  // "生成点单口语", doOrder hits the cache branch above and transitions instantly.
-  //
-  // Invariants:
-  // - Any change to selection / preferences wipes orderCache first, so doOrder
-  //   never serves a stale translation that belongs to a previous selection.
-  // - Every scheduled prefetch owns an AbortController; the effect cleanup cancels
-  //   both the pending timer and any in-flight fetch, so rapid picking never
-  //   stacks concurrent requests.
-  // - retries=0 for prefetch: we don't want to burn tokens on transient failures;
-  //   if the user actually clicks, doOrder runs with normal retry behavior.
   useEffect(() => {
     if (step !== 3) return;
 
-    // Selection or preferences changed → any prior cached order is stale
     setOrderCache({});
 
     if (selected.length === 0) return;
@@ -538,17 +503,14 @@ Start { end }. Nothing else.`;
         if (dishes.length === 0) return;
         const raw = await ask(
           [{ role: "user", content: buildOrderPrompt(lang, dishes) }],
-          0,
-          ctrl.signal,
+          { retries: 0, signal: ctrl.signal, maxTokens: 1000, timeoutMs: REQUEST_TIMEOUTS.order },
         );
         if (ctrl.signal.aborted) return;
         const res = safeParse(raw);
         if (res && res.order) {
-          // Guard against overwriting a value doOrder may have just written
           setOrderCache(prev => prev[lang.key] ? prev : { ...prev, [lang.key]: res });
         }
       } catch {
-        // silent — prefetch is best-effort; doOrder handles real errors on click
       }
     }, 800);
 
@@ -556,9 +518,6 @@ Start { end }. Nothing else.`;
       clearTimeout(timer);
       ctrl.abort();
     };
-    // buildOrderPrompt/ask are stable closures over the listed deps; excluding them
-    // avoids re-firing the effect every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, selected, orderLang, recs, party, avoids, notes]);
 
   const doCopy = (t) => { navigator.clipboard?.writeText(t); setCopied(true); setTimeout(() => setCopied(false), 2000); };
@@ -569,7 +528,6 @@ Start { end }. Nothing else.`;
   };
   const Stars = ({ n }) => <span style={{ color: "#F59E0B", fontSize: "13px", letterSpacing: "2px" }}>{"★".repeat(Math.min(n, 5))}{"☆".repeat(Math.max(5 - n, 0))}</span>;
 
-  // ── Preference section (shared by 忌口 and 喜欢口味) ──
   const PreferenceSection = ({ icon, title, hint, options, selected, setSelected, inputValue, setInputValue, inputPlaceholder }) => (
     <Card>
       <SectionTitle icon={icon}>{title}</SectionTitle>
@@ -591,7 +549,6 @@ Start { end }. Nothing else.`;
     </Card>
   );
 
-  // ── Menu item card (reusable) ──
   const MenuItem = ({ idx }) => {
     const item = menuItems[idx];
     const isFav = favorites.includes(idx);
@@ -626,13 +583,10 @@ Start { end }. Nothing else.`;
     );
   };
 
-  // ══════════ RENDER ══════════
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: font, color: C.ink, maxWidth: 480, margin: "0 auto", position: "relative" }}>
-      <GlobalCSS />
       <Celebration show={celebrate} />
 
-      {/* Header */}
       <div style={{
         background: `linear-gradient(160deg, ${C.accent} 0%, ${C.accentDark} 100%)`,
         padding: "32px 20px 24px", color: "#fff", textAlign: "center",
@@ -648,7 +602,7 @@ Start { end }. Nothing else.`;
         </div>
       </div>
 
-      <div style={{ padding: "0 16px 40px" }}>
+      <div style={{ padding: "0 16px 72px" }}>
         <StepBar current={step} />
 
         {error && (
@@ -660,7 +614,6 @@ Start { end }. Nothing else.`;
 
         {loading ? <Loading text={loadText} /> : (
           <>
-            {/* ═══ STEP 0 · 拍菜单 ═══ */}
             {step === 0 && (
               <div style={{ animation: "fadeUp 0.4s ease" }}>
                 {images.length > 0 && (
@@ -702,10 +655,8 @@ Start { end }. Nothing else.`;
               </div>
             )}
 
-            {/* ═══ STEP 1 · 菜单总览 ═══ */}
             {step === 1 && (
               <div style={{ animation: "fadeUp 0.4s ease" }}>
-                {/* Success banner */}
                 <div style={{ background: C.greenBg, borderRadius: C.rs, padding: "10px 16px", marginBottom: "14px", textAlign: "center", fontSize: "13px", color: C.green, lineHeight: 1.6 }}>
                   ✓ 共识别 <strong style={{ fontSize: "18px", color: C.accent, margin: "0 2px" }}>{menuItems.length}</strong> 道菜品
                   {categoryNames.length > 1 && <span style={{ color: C.sub }}> · {categoryNames.length} 个分类</span>}
@@ -717,7 +668,6 @@ Start { end }. Nothing else.`;
                   )}
                 </div>
 
-                {/* Category tabs */}
                 <div className="cat-scroll" style={{ display: "flex", gap: "6px", overflowX: "auto", paddingBottom: "10px", marginBottom: "10px" }}>
                   <SmallPill active={activeCat === "全部"} onClick={() => setActiveCat("全部")}>
                     全部 {menuItems.length}
@@ -734,7 +684,6 @@ Start { end }. Nothing else.`;
                   ))}
                 </div>
 
-                {/* Menu items */}
                 {activeCat === "全部" && categoryNames.length > 1 ? (
                   categoryNames.map(cat => (
                     <div key={cat} style={{ marginBottom: "14px" }}>
@@ -755,10 +704,8 @@ Start { end }. Nothing else.`;
                   </div>
                 )}
 
-                {/* Bottom spacing for sticky bar */}
                 <div style={{ height: "80px" }} />
 
-                {/* Sticky bottom bar */}
                 <div style={{
                   position: "sticky", bottom: 0, left: 0, right: 0,
                   background: "rgba(255,251,245,0.96)", backdropFilter: "blur(10px)",
@@ -775,7 +722,6 @@ Start { end }. Nothing else.`;
               </div>
             )}
 
-            {/* ═══ STEP 2 · 偏好设置 ═══ */}
             {step === 2 && (
               <div style={{ animation: "fadeUp 0.4s ease" }}>
                 {favorites.length > 0 && (
@@ -794,7 +740,7 @@ Start { end }. Nothing else.`;
                       <span style={{ fontSize: "13px", color: C.sub, marginLeft: "2px" }}>人</span>
                     </div>
                     <button onClick={() => setParty(Math.min(12, party + 1))} style={{ width: 38, height: 38, borderRadius: "50%", border: `1.5px solid ${C.line}`, background: C.bg, fontSize: "18px", cursor: "pointer", fontFamily: font, display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
-                    <span style={{ fontSize: "11px", color: C.muted, marginLeft: "auto" }}>推荐 {Math.max(3, party + 1)}-{Math.min(Math.max(5, party * 2), 10)} 道</span>
+                    <span style={{ fontSize: "11px", color: C.muted, marginLeft: "auto" }}>推荐 {getRecommendRange().min}-{getRecommendRange().max} 道</span>
                   </div>
                 </Card>
 
@@ -841,7 +787,6 @@ Start { end }. Nothing else.`;
                   <Button onClick={doRecommend} style={{ flex: 2 }}>🍽 开始推荐</Button>
                 </div>
 
-                {/* Skip shortcut */}
                 <div style={{ textAlign: "center", marginTop: "12px" }}>
                   <span onClick={doRecommend} style={{ fontSize: "12px", color: C.muted, cursor: "pointer", textDecoration: "underline" }}>
                     什么都吃，跳过直接推荐 →
@@ -850,7 +795,6 @@ Start { end }. Nothing else.`;
               </div>
             )}
 
-            {/* ═══ STEP 3 · 菜品推荐 ═══ */}
             {step === 3 && (
               <div style={{ animation: "fadeUp 0.4s ease" }}>
                 <p style={{ fontSize: "14px", color: C.sub, marginBottom: "16px", textAlign: "center", lineHeight: 1.6 }}>
@@ -912,7 +856,6 @@ Start { end }. Nothing else.`;
               </div>
             )}
 
-            {/* ═══ STEP 4 · 完成点餐 ═══ */}
             {step === 4 && order && (
               <div style={{ animation: "fadeUp 0.4s ease" }}>
                 <Card style={{ border: `2px solid ${C.accent}`, boxShadow: C.shadowUp, padding: "20px" }}>
@@ -988,6 +931,26 @@ Start { end }. Nothing else.`;
           </>
         )}
       </div>
+      <footer style={{
+        position: "fixed",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 20,
+        padding: "8px 16px 10px",
+        textAlign: "center",
+        background: "rgba(255,251,245,0.88)",
+        backdropFilter: "blur(8px)",
+      }}>
+        <a
+          href="https://beian.miit.gov.cn/"
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: C.muted, fontSize: "12px", textDecoration: "none" }}
+        >
+          滇ICP备2026003699号-2
+        </a>
+      </footer>
     </div>
   );
 }

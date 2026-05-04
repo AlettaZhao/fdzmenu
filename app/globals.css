@@ -40,3 +40,18 @@ html, body {
   75% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
   100% { transform: translate(-50%, -50%) scale(0.9); opacity: 0; }
 }
+
+@keyframes heartBeat {
+  0% { transform: scale(1); }
+  25% { transform: scale(1.3); }
+  50% { transform: scale(0.95); }
+  100% { transform: scale(1); }
+}
+
+.fav-btn:active {
+  animation: heartBeat 0.3s ease;
+}
+
+.cat-scroll::-webkit-scrollbar {
+  display: none;
+}

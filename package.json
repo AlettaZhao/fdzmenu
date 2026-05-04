@@ -1,6 +1,9 @@
 {
   "name": "fandazi",
   "version": "1.0.0",
+  "description": "拍照识别菜单并推荐菜品的点餐助手",
+  "author": "Xiaoxuan Zhao（赵小炫）",
+  "license": "AGPL-3.0-only",
   "private": true,
   "scripts": {
     "dev": "next dev",
